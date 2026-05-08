@@ -43,18 +43,13 @@ npm start
 
 ## Umgebungsvariablen
 
-Erstellen Sie eine `.env` Datei im Backend-Verzeichnis:
-
-```
-MONGODB_URI=mongodb://localhost:27017/clearconnect
-PORT=3001
-```
+Keine externe Datenbank nötig! Daten werden lokal in `backend/data/sessions.json` gespeichert.
 
 ## Technologie-Stack
 
 - **Frontend**: React, JavaScript
 - **Backend**: Node.js, Express
-- **Datenbank**: MongoDB
+- **Datenspeicherung**: JSON-Dateien (lokal)
 
 ## Lizenz
 
