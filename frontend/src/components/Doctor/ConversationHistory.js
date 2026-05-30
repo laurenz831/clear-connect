@@ -1,18 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 
-// Zeigt den kompletten Gesprächsverlauf als Liste von Nachrichten.
-// Scrollt automatisch nach unten wenn eine neue Nachricht ankommt.
-
 const ABSENDER = {
-  doctor:  'Arzt',
-  patient: 'Patient',
-  system:  'System',
+  doctor:    'Arzt',
+  patient:   'Patient',
+  system:    'System',
+  diagnosis: 'Arzt-Mitteilung',
 };
 
 export default function ConversationHistory({ conversation }) {
   const bottomRef = useRef(null);
 
-  // Jedes Mal wenn eine neue Nachricht dazu kommt, nach unten scrollen
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversation]);

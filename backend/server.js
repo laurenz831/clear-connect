@@ -1,100 +1,83 @@
 // ClearConnect – Backend Server
-// Speichert alles im Arbeitsspeicher (kein Datenbank nötig).
-// Beide Frontends (Arzt + Patient) fragen diesen Server jede Sekunde nach dem aktuellen Stand.
+// Zustand wird im Arbeitsspeicher gehalten (keine Datenbank nötig).
 
 const express = require('express');
-const cors = require('cors');
+const cors    = require('cors');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── Zustand der Konsultation ────────────────────────────────────────────────
-//
-// Dieser eine Zustand beschreibt alles was gerade passiert.
-// "phase" zeigt in welchem Schritt wir uns befinden:
-//
-//   'welcome'      → Patient sieht den Willkommensbildschirm
-//   'waiting'      → Patient hat Kategorie gewählt, wartet auf Arzt
-//   'called'       → Arzt hat Patient aufgerufen
-//   'consultation' → Aktives Gespräch, Fragen werden gestellt
-//   'finishing'    → Arzt hat Gespräch beendet, Patient wird gefragt
-//   'summary'      → Patient prüft die Zusammenfassung
-//   'done'         → Alles fertig
-//
-let state = createInitialState();
+// ─── Initialer Zustand ───────────────────────────────────────────────────────
+let state     = createInitialState();
+let sessions  = [];      // Archiv abgeschlossener Konsultationen
+let sessionId = 1;
 
 function createInitialState() {
   return {
-    phase: 'welcome',
-    patientCategory: null,    // z.B. 'pain', 'checkup', 'medication', 'other'
-    currentQuestion: null,    // { text, category, type } – aktuelle Frage
-    currentAnswer: null,      // Antwort des Patienten als Text
-    conversation: [],         // [ { sender, text, timestamp } ] – Gesprächsverlauf
-    summaryRequested: null,   // true/false – will Patient eine Zusammenfassung?
-    summaryConfirmed: null,   // true/false – hat Patient bestätigt?
+    phase:           'welcome',
+    patientCategory: null,
+    currentQuestion: null,
+    currentAnswer:   null,
+    conversation:    [],
+    summaryRequested: null,
+    summaryConfirmed: null,
+    diagnosis:        null,
+    diagnosisShown:   false,
+    startedAt:        null,
   };
 }
 
-// Hilfsfunktion: aktuelle Uhrzeit als HH:MM
 function nowTime() {
   return new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 }
 
-// Hilfsfunktion: Nachricht zum Gesprächsverlauf hinzufügen
 function addMessage(sender, text) {
   state.conversation.push({ sender, text, timestamp: nowTime() });
 }
 
-// ─── API Endpunkte ────────────────────────────────────────────────────────────
+// ─── Endpunkte ───────────────────────────────────────────────────────────────
 
 // GET /api/state
-// Das Frontend fragt diesen Endpunkt jede Sekunde ab, um den aktuellen Stand zu bekommen
-app.get('/api/state', (req, res) => {
-  res.json(state);
-});
+app.get('/api/state', (req, res) => res.json(state));
 
-// POST /api/category
-// Patient wählt seinen Besuchsgrund aus (z.B. Schmerzen)
+// GET /api/sessions – Verlauf vergangener Konsultationen
+app.get('/api/sessions', (req, res) => res.json(sessions));
+
+// POST /api/category – Patient wählt Besuchsgrund
 app.post('/api/category', (req, res) => {
   const { category } = req.body;
   state.patientCategory = category;
-  state.phase = 'waiting';
-  addMessage('system', `Patient hat eingecheckt – Grund: ${category}`);
+  state.phase     = 'waiting';
+  state.startedAt = nowTime();
+  addMessage('system', `Patient eingecheckt – Anliegen: ${category}`);
   res.json({ ok: true });
 });
 
-// POST /api/call-patient
-// Arzt ruft den Patienten ins Zimmer
+// POST /api/call-patient – Arzt ruft Patient auf
 app.post('/api/call-patient', (req, res) => {
   state.phase = 'called';
-  addMessage('system', 'Arzt hat den Patienten aufgerufen');
+  addMessage('system', 'Patient aufgerufen');
   res.json({ ok: true });
 });
 
-// POST /api/patient-ready
-// Patient hat "Verstanden" gedrückt und betritt das Zimmer
+// POST /api/patient-ready – Patient betritt Zimmer
 app.post('/api/patient-ready', (req, res) => {
   state.phase = 'consultation';
   res.json({ ok: true });
 });
 
-// POST /api/question
-// Arzt schickt eine Frage an den Patienten
+// POST /api/question – Arzt sendet Frage
 app.post('/api/question', (req, res) => {
   const { text, category, type } = req.body;
-  state.currentQuestion = {
-    text,
-    category: category || 'Frage',
-    type: type || 'yesno',   // 'yesno' | 'scale' | 'text'
-  };
-  state.currentAnswer = null; // alte Antwort löschen
+  state.currentQuestion = { text, category: category || 'Frage', type: type || 'yesno' };
+  state.currentAnswer   = null;
+  state.diagnosisShown  = false;
   addMessage('doctor', text);
   res.json({ ok: true });
 });
 
-// POST /api/answer
-// Patient schickt seine Antwort
+// POST /api/answer – Patient antwortet
 app.post('/api/answer', (req, res) => {
   const { text } = req.body;
   state.currentAnswer = text;
@@ -102,40 +85,73 @@ app.post('/api/answer', (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/finish-consultation
-// Arzt beendet das Gespräch
+// POST /api/diagnosis – Arzt sendet Diagnose / Abschlussmitteilung
+// Patient muss NICHT antworten; diagnosisShown steuert die Patientenansicht.
+app.post('/api/diagnosis', (req, res) => {
+  const { text } = req.body;
+  state.diagnosis      = text;
+  state.diagnosisShown = true;
+  state.currentQuestion = null;
+  state.currentAnswer   = null;
+  addMessage('diagnosis', `Arzt-Mitteilung: ${text}`);
+  res.json({ ok: true });
+});
+
+// POST /api/diagnosis-ack – Patient hat Diagnose gelesen
+app.post('/api/diagnosis-ack', (req, res) => {
+  state.diagnosisShown = false;
+  res.json({ ok: true });
+});
+
+// POST /api/finish-consultation – Arzt beendet Gespräch
 app.post('/api/finish-consultation', (req, res) => {
   state.phase = 'finishing';
   res.json({ ok: true });
 });
 
-// POST /api/summary-request
-// Patient entscheidet ob er eine Zusammenfassung möchte
+// POST /api/summary-request – Patient entscheidet über Zusammenfassung
 app.post('/api/summary-request', (req, res) => {
   const { wants } = req.body;
   state.summaryRequested = wants;
   state.phase = wants ? 'summary' : 'done';
+  if (!wants) archiveSession();
   res.json({ ok: true });
 });
 
-// POST /api/summary-confirm
-// Patient bestätigt die Zusammenfassung
+// POST /api/summary-confirm – Patient bestätigt Zusammenfassung
 app.post('/api/summary-confirm', (req, res) => {
   const { confirmed } = req.body;
   state.summaryConfirmed = confirmed;
   state.phase = 'done';
+  archiveSession();
   res.json({ ok: true });
 });
 
-// POST /api/reset
-// Neue Konsultation starten (alles zurücksetzen)
+// POST /api/reset – Neue Konsultation
 app.post('/api/reset', (req, res) => {
+  if (state.phase !== 'welcome') archiveSession();
   state = createInitialState();
   res.json({ ok: true });
 });
 
+// ─── Archivierung ─────────────────────────────────────────────────────────────
+function archiveSession() {
+  if (!state.startedAt) return;
+  sessions.unshift({
+    id:       sessionId++,
+    category: state.patientCategory,
+    start:    state.startedAt,
+    end:      nowTime(),
+    date:     new Date().toLocaleDateString('de-DE'),
+    questions: state.conversation.filter(m => m.sender === 'doctor').length,
+    diagnosis: state.diagnosis,
+    confirmed: state.summaryConfirmed,
+  });
+  if (sessions.length > 50) sessions.pop();
+}
+
 // ─── Server starten ───────────────────────────────────────────────────────────
 const PORT = 3001;
 app.listen(PORT, () => {
-  console.log(`✅ ClearConnect Backend läuft auf http://localhost:${PORT}`);
+  console.log(`ClearConnect Backend läuft auf http://localhost:${PORT}`);
 });
